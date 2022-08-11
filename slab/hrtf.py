@@ -1046,3 +1046,50 @@ class HRTF:
         samplingRateVar.Units = 'hertz'
         samplingRateVar[:] = self.samplerate
         sofa.close()
+
+    def equalize_frequencies(self):
+        """
+        Description
+        Arguments:
+        Returns:
+        Examples:
+        """
+        # use cosine filter bank
+        fbank = Filter.cos_filterbank(length=(self.frequencies * 2) - 1, bandwidth=1 / 10,
+                                      samplerate=self.samplerate, pass_bands=True)
+        # triangular filter bank
+        freq_bins = numpy.fft.rfftfreq((self.frequencies * 2) - 1, d=1 / self.samplerate)
+        n_freqs = len(freq_bins)
+        center_freqs, bandwidth, erb_spacing = Filter._center_freqs(
+            low_cutoff=0, high_cutoff=self.samplerate/2, bandwidth=1/20, pass_bands=True)
+        n_filters = len(center_freqs)
+        filts = numpy.zeros((n_freqs, n_filters))
+        freqs_erb = Filter._freq2erb(freq_bins)
+        for i in range(n_filters):
+            l = center_freqs[i] - erb_spacing
+            h = center_freqs[i] + erb_spacing
+            avg = center_freqs[i]  # center of filter
+            # width = erb_spacing * 2  # width of filter
+            filts[(freqs_erb > l) & (freqs_erb < avg), i] = numpy.interp(freqs_erb[(freqs_erb > l) & (freqs_erb < avg)],
+                                                                         numpy.array((l, avg)), numpy.array((0, 1)))
+            filts[(freqs_erb > avg) & (freqs_erb < h), i] = numpy.interp(freqs_erb[(freqs_erb > avg) & (freqs_erb < h)],
+                                                                         numpy.array((avg, h)), numpy.array((1, 0)))
+        fbank = Filter(data=filts, samplerate=self.samplerate, fir=False)
+        out = copy.deepcopy(self)
+        for src_idx, dtf in enumerate(self.data):
+            subbands = numpy.empty((dtf.n_samples, fbank.n_filters, 2))
+            band_rms = numpy.empty((fbank.n_filters, 2))
+            for filt in range(fbank.n_filters):
+                subbands[ :, filt, 0] = dtf[:, 0] * fbank[:, filt]
+                subbands[ :, filt, 1] = dtf[:, 1] * fbank[:, filt]
+                band_rms[filt, 0] = numpy.sqrt(numpy.mean(numpy.square(subbands[ :, filt, 0]), axis=0))
+                band_rms[filt, 1] = numpy.sqrt(numpy.mean(numpy.square(subbands[ :, filt, 1]), axis=0))
+            out.data[src_idx].data = subbands.sum(axis=1)
+        center_freqs = Filter._erb2freq(center_freqs)
+        """ 
+        # remove common component and store DTFs [measurements, receivers, N data points]
+        # r_avg = numpy.mean(numpy.fft.rfft(rec_data),axis=0)  # avg magnitude of recordings (direction-independent)
+        # comm = r_avg / sig_fft  # R ( f, az,el,x) = S( f ) X D( f, az,el) X comm(f,x); Middlebrooks (1990)
+        # hrtf_data = numpy.fft.rfft(rec_data) / (sig_fft * comm)  # HRTFs with common component removed
+        """
+        return out
